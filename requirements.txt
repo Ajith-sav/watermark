@@ -1,0 +1,7 @@
+ldap3==2.9.1
+pillow==12.2.0
+psutil==7.2.2
+pyasn1==0.6.3
+pystray==0.19.5
+pywin32==312
+six==1.17.0

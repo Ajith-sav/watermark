@@ -59,7 +59,7 @@ CONFIG = {
     "static_text_show_timestamp": True,
 
     # How often (seconds) to refresh the timestamp shown in the watermark.
-    "text_refresh_seconds": 60,
+    "text_refresh_seconds": 10,
 
     # How often (seconds) to check which application is in the foreground.
     "foreground_poll_seconds": 1,
