@@ -51,16 +51,9 @@ CONFIG = {
     #   "login_user" -> the currently logged-in Windows username
     #                   (no AD/network lookup needed; works offline)
     #   "static"     -> a fixed string you set below
-    #   "ad"         -> looked up from Active Directory (ADSI or LDAP)
     "text_source": "login_user",
 
     # Used when text_source = "login_user". Choose how much detail to show:
-    #   "username"       -> just the Windows username, e.g. "jdoe"
-    #   "username_host"  -> "jdoe@DESKTOP-1234"
-    #   "full_name"      -> the account's display/full name if available,
-    #                       falling back to the username if not (this does
-    #                       one quick local ADSI call - no domain network
-    #                       round-trip required for a domain-joined PC)
     "login_user_format": "username",
 
     # If True, a date/time stamp is appended below the username.
@@ -71,7 +64,7 @@ CONFIG = {
     "static_text_show_timestamp": True,
 
     # How often (seconds) to refresh the timestamp shown in the watermark.
-    "text_refresh_seconds": 60,
+    "text_refresh_seconds": 30,
 
     # How often (seconds) to check which application is in the foreground.
     "foreground_poll_seconds": 1,
@@ -166,7 +159,7 @@ def get_login_user_text():
 
     if CONFIG["login_user_show_timestamp"]:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        text = f"{text} | {timestamp}"
+        text = f"{text.title()} | {timestamp}"
 
     return text
 
