@@ -11,7 +11,6 @@ configured "excluded" applications.
 
 Requirements (Windows only):
     pip install pywin32 psutil
-    pip install ldap3        (optional - only needed for full LDAP queries)
     pip install pystray pillow (optional - only needed for the tray icon)
 
 Run:
@@ -46,20 +45,33 @@ import psutil
 
 CONFIG = {
     # -----------------------------------------------------------------
-    # STATIC WATERMARK TEXT
+    # WATERMARK TEXT SOURCE
     # -----------------------------------------------------------------
-    # If "use_static_text" is True, the watermark always shows
-    # "static_text" exactly as written below, and the AD/LDAP lookups
-    # are skipped entirely. Set this to False to derive the watermark
-    # text from Active Directory instead (see the AD/LDAP section below).
-    "use_static_text": True,
-    "static_text": "CONFIDENTIAL - INTERNAL USE ONLY",
+    # Choose where the watermark text comes from:
+    #   "login_user" -> the currently logged-in Windows username
+    #                   (no AD/network lookup needed; works offline)
+    #   "static"     -> a fixed string you set below
+    #   "ad"         -> looked up from Active Directory (ADSI or LDAP)
+    "text_source": "login_user",
 
-    # If True, a date/time stamp is appended below the static text.
+    # Used when text_source = "login_user". Choose how much detail to show:
+    #   "username"       -> just the Windows username, e.g. "jdoe"
+    #   "username_host"  -> "jdoe@DESKTOP-1234"
+    #   "full_name"      -> the account's display/full name if available,
+    #                       falling back to the username if not (this does
+    #                       one quick local ADSI call - no domain network
+    #                       round-trip required for a domain-joined PC)
+    "login_user_format": "username",
+
+    # If True, a date/time stamp is appended below the username.
+    "login_user_show_timestamp": True,
+
+    # Used when text_source = "static".
+    "static_text": "CONFIDENTIAL - INTERNAL USE ONLY",
     "static_text_show_timestamp": True,
 
     # How often (seconds) to refresh the timestamp shown in the watermark.
-    "text_refresh_seconds": 10,
+    "text_refresh_seconds": 60,
 
     # How often (seconds) to check which application is in the foreground.
     "foreground_poll_seconds": 1,
@@ -77,11 +89,10 @@ CONFIG = {
     "font_size": 14,
 
     # Color of the watermark text (hex).
-    "text_color": "#DCDCDC",
+    "text_color": "#FFFFFF",
 
     # 0.0 (invisible) - 1.0 (fully opaque). Recommended: 0.10 - 0.30
     "opacity": 0.2,
-    # "opacity": 0.18,
 
     # Spacing (pixels) between repeated watermark tiles.
     "tile_spacing_x": 350,
@@ -123,21 +134,6 @@ CONFIG = {
         "vlc.exe",
     ],
 
-    # -----------------------------------------------------------------
-    # Active Directory / LDAP settings (only used by get_ldap_watermark)
-    # -----------------------------------------------------------------
-    # If "use_ldap" is False, the script falls back to the simple
-    # local ADSI lookup (works for the currently logged-in domain user
-    # without extra credentials).
-    "use_ldap": False,
-    "ldap_server": "ldap://your-domain-controller.example.com",
-    # Attributes to pull from AD and include in the watermark, in order.
-    "ldap_attributes": ["displayName", "mail", "department"],
-    # Leave these blank to bind using the current Windows session
-    # (Kerberos/NTLM via SSPI). Fill them in only if you need an
-    # explicit service account.
-    "ldap_bind_user": "",
-    "ldap_bind_password": "",
 }
 
 
@@ -152,99 +148,47 @@ def get_local_user_info():
     return username, hostname
 
 
-def get_adsi_watermark_text():
+def get_login_user_text():
     """
-    Quick AD lookup using the WinNT ADSI provider. This works for the
-    currently logged-in domain user using the existing security context
-    (no extra credentials needed) and returns the user's full name.
+    Build watermark text from the currently logged-in Windows username.
+    No Active Directory / network lookup is required for "username" or
+    "username_host" formats - getpass.getuser() reads this straight from
+    the local Windows session. Only "full_name" does one quick *local*
+    ADSI call (no domain round-trip) to resolve the display name.
     """
     username, hostname = get_local_user_info()
-    full_name = username
+    fmt = CONFIG["login_user_format"]
 
-    try:
-        import win32com.client
-        # WinNT provider against the local machine resolves the
-        # currently logged-on domain user's account object.
-        user_obj = win32com.client.GetObject(f"WinNT://{hostname}/{username},user")
-        if getattr(user_obj, "FullName", ""):
-            full_name = user_obj.FullName
-    except Exception:
-        pass
+    if fmt == "username_host":
+        text = f"{username}@{hostname}" 
+    else:  # "username" (default)
+        text = username
 
-    return full_name, username, hostname
+    if CONFIG["login_user_show_timestamp"]:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        text = f"{text} | {timestamp}"
 
-
-def get_ldap_watermark_text():
-    """
-    Full LDAP query against Active Directory for richer attributes
-    (display name, email, department, employee ID, etc.).
-
-    Requires: pip install ldap3
-    """
-    from ldap3 import Server, Connection, ALL, SUBTREE, NTLM, SASL, KERBEROS
-
-    username, hostname = get_local_user_info()
-    server = Server(CONFIG["ldap_server"], get_info=ALL)
-
-    try:
-        if CONFIG["ldap_bind_user"]:
-            conn = Connection(
-                server,
-                user=CONFIG["ldap_bind_user"],
-                password=CONFIG["ldap_bind_password"],
-                authentication=NTLM,
-                auto_bind=True,
-            )
-        else:
-            # Use the current Windows session's Kerberos ticket.
-            conn = Connection(server, authentication=SASL, sasl_mechanism=KERBEROS, auto_bind=True)
-
-        # Search for the current user's object.
-        search_filter = f"(sAMAccountName={username})"
-        conn.search(
-            search_base=server.info.other.get("defaultNamingContext", [""])[0],
-            search_filter=search_filter,
-            search_scope=SUBTREE,
-            attributes=CONFIG["ldap_attributes"],
-        )
-
-        if conn.entries:
-            entry = conn.entries[0]
-            values = []
-            for attr in CONFIG["ldap_attributes"]:
-                val = getattr(entry, attr, None)
-                if val:
-                    values.append(str(val))
-            conn.unbind()
-            if values:
-                return " | ".join(values)
-
-        conn.unbind()
-    except Exception as exc:
-        print(f"[watermark] LDAP lookup failed, falling back to local info: {exc}")
-
-    # Fallback if LDAP fails or returns nothing.
-    full_name, username, hostname = get_adsi_watermark_text()
-    return f"{full_name} ({username})"
+    return text
 
 
 def get_watermark_text():
-    """Build the full multi-line watermark string."""
-    if CONFIG["use_static_text"]:
+    """Build the full watermark string based on CONFIG["text_source"]."""
+    source = CONFIG["text_source"]
+
+    if source == "login_user":
+        return get_login_user_text()
+
+    if source == "static":
         text = CONFIG["static_text"]
         if CONFIG["static_text_show_timestamp"]:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            text = f"{text}\n{timestamp}"
+            text = f"{text} | {timestamp}"
         return text
 
-    if CONFIG["use_ldap"]:
-        identity = get_ldap_watermark_text()
-    else:
-        full_name, username, hostname = get_adsi_watermark_text()
-        identity = f"{full_name}\n{username}@{hostname}"
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    return f"{identity}\n{timestamp}"
+    # Unknown text_source - fail safe to the login username rather than
+    # showing nothing.
+    print(f"[watermark] Unknown text_source '{source}', falling back to login_user")
+    return get_login_user_text()
 
 
 # ---------------------------------------------------------------------------
