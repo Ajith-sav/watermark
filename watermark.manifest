@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <!--
+          requireAdministrator: Windows will show a UAC prompt and run
+          the exe elevated every time it starts. This is recommended if
+          you rely on CONFIG["run_as_admin"] so the watermark can stay on
+          top of other elevated applications (see watermark.py).
+
+          If you do NOT need elevation, change this to "asInvoker" and
+          rebuild - the exe will then run with normal user privileges
+          and no UAC prompt.
+        -->
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

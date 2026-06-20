@@ -14,7 +14,7 @@ Requirements (Windows only):
     pip install pystray pillow (optional - only needed for the tray icon)
 
 Run:
-    python desktop_watermark.py
+    python watermark.py
 
 To stop:
     Right-click the tray icon (if pystray is installed) -> Exit

@@ -1,0 +1,510 @@
+# Desktop Watermark Overlay (Windows)
+
+A lightweight Python tool that shows a tiled, semi-transparent watermark
+across your desktop and on top of all open applications — useful for
+"For Internal Use Only" / "Confidential — <username>" style overlays on
+shared screens, screenshots, or recordings.
+
+The watermark text shows the **currently logged-in Windows username** by
+default (no Active Directory or network lookup needed), with optional modes
+to use a fixed static message or a full Active Directory lookup instead.
+The overlay can also be configured to **hide itself automatically** for
+specific applications (e.g. a video conferencing tool where it would be
+distracting or sensitive).
+
+---
+
+## 1. Requirements
+
+This tool is **Windows-only** (it relies on the Win32 API for the
+click-through, always-on-top overlay).
+
+Install Python 3.9+ on the target machine, then:
+
+```bash
+pip install pywin32 psutil
+```
+
+Optional, for a richer AD/LDAP lookup (department, email, employee ID, etc.):
+
+```bash
+pip install ldap3
+```
+
+Optional, for a system tray "Exit" button:
+
+```bash
+pip install pystray pillow
+```
+
+---
+
+## 2. Setting the watermark text
+
+All watermark text options are controlled by `CONFIG["text_source"]` in
+`watermark.py`:
+
+```python
+"text_source": "login_user",   # "login_user" | "static" | "ad"
+```
+
+### `"login_user"` — currently logged-in Windows username (default)
+
+Shows the username of whoever is currently logged into the PC. This needs
+**no Active Directory or network lookup at all** — it reads directly from
+the local Windows session, so it works offline and on non-domain-joined
+machines too.
+
+```python
+"text_source": "login_user",
+"login_user_format": "username",        # see options below
+"login_user_show_timestamp": True,
+```
+
+`login_user_format` controls how much detail is shown:
+
+| Value                  | Example output      | Needs a lookup?                                                                                                                        |
+| ---------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `"username"` (default) | `jdoe`              | No - pure local OS call                                                                                                                |
+| `"username_host"`      | `jdoe@DESKTOP-1234` | No - pure local OS call                                                                                                                |
+| `"full_name"`          | `John Doe`          | One quick _local_ ADSI call (no domain network round-trip) to resolve the display name; falls back to the plain username if that fails |
+
+Set `login_user_show_timestamp` to `False` if you don't want a date/time
+stamp appended below the username.
+
+### `"static"` — a fixed message you write yourself
+
+```python
+"text_source": "static",
+"static_text": "CONFIDENTIAL - INTERNAL USE ONLY",
+"static_text_show_timestamp": True,
+```
+
+### `"ad"` — looked up from Active Directory
+
+Set `"text_source": "ad"` to pull the watermark text from Active Directory
+instead. See the next section for how that's configured.
+
+## 3. How the AD watermark text is obtained (when text_source = "ad")
+
+There are two modes, controlled by `CONFIG["use_ldap"]` in
+`watermark.py`:
+
+### Mode A — Local ADSI lookup (default, `use_ldap = False`)
+
+Uses the Windows `WinNT://` ADSI provider to read the **currently logged-in
+domain user's** `FullName` directly from the OS, with no extra credentials
+or network calls. The watermark shows:
+
+```
+<Full Name>
+<username>@<hostname>
+<date time>
+```
+
+### Mode B — Full LDAP query (`use_ldap = True`)
+
+Connects to your domain controller and pulls any attributes you list in
+`CONFIG["ldap_attributes"]` (e.g. `displayName`, `mail`, `department`,
+`employeeID`) for the current user's account.
+
+Edit these settings before enabling Mode B:
+
+```python
+"use_ldap": True,
+"ldap_server": "ldap://your-domain-controller.example.com",
+"ldap_attributes": ["displayName", "mail", "department"],
+"ldap_bind_user": "",       # leave blank to use the current Windows session
+"ldap_bind_password": "",   # only needed if ldap_bind_user is set
+```
+
+If LDAP is unreachable or the lookup fails, the script automatically falls
+back to Mode A so the watermark is never left blank.
+
+---
+
+## 4. Excluding specific applications
+
+Add the executable names (lowercase, with `.exe`) of any apps that should
+**not** have the watermark shown over them while they're in focus:
+
+```python
+"excluded_processes": [
+    "teams.exe",
+    "zoom.exe",
+    "vlc.exe",
+],
+```
+
+A background thread checks the foreground (active) window roughly once per
+second. If the active app's process matches this list, the overlay is
+hidden; otherwise it's shown again automatically.
+
+> Note: this hides the overlay only while the excluded app is in the
+> **foreground**. If you switch back to another app, the watermark
+> reappears within ~1 second.
+
+---
+
+## 5. Customizing appearance
+
+All of these are in the `CONFIG` dictionary at the top of the script:
+
+| Setting                            | Purpose                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `opacity`                          | Overall transparency (0.0–1.0). 0.15–0.25 is usually a good balance. |
+| `font_family`, `font_size`         | Watermark font.                                                      |
+| `text_color`                       | Hex color of the watermark text.                                     |
+| `tile_spacing_x`, `tile_spacing_y` | Spacing between repeated watermark tiles.                            |
+| `rotation_angle`                   | Tilt of the watermark text (in degrees).                             |
+| `text_refresh_seconds`             | How often the timestamp in the watermark updates.                    |
+
+---
+
+## 6. Running it
+
+```bash
+python watermark.py
+```
+
+- The window is borderless, always-on-top, click-through, and excluded
+  from Alt-Tab.
+- If `pystray` + `pillow` are installed, a small red tray icon appears with
+  an **Exit** option. Otherwise, stop it via Task Manager (`python.exe` or
+  `pythonw.exe`).
+- To run it silently without a console window, rename/run it with
+  `pythonw.exe watermark.py`.
+
+---
+
+## 7. Auto-start when the user logs in
+
+There are three common ways to do this on Windows. Which one to use depends
+mainly on whether the app needs to run **elevated** ("Run as administrator").
+
+| Method                  | UAC prompt at login?           | Best for                                            |
+| ----------------------- | ------------------------------ | --------------------------------------------------- |
+| Startup folder shortcut | Yes, if exe requires elevation | Non-elevated runs (simplest)                        |
+| Task Scheduler          | No (runs elevated silently)    | Elevated runs (recommended if `run_as_admin: True`) |
+| Registry `Run` key      | Yes, if exe requires elevation | Scripted/automated deployment                       |
+
+### Option A — Startup folder (simplest, non-elevated only)
+
+1. Press `Win + R`, type `shell:startup`, press Enter. This opens:
+   ```
+   C:\Users\<username>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
+   ```
+2. Create a shortcut inside that folder pointing to either:
+   - The exe build: `DesktopWatermark.exe`, or
+   - The script directly: `pythonw.exe "C:\path\to\watermark.py"`
+     (use `pythonw.exe`, not `python.exe`, so no console window appears)
+
+**Limitation**: if the target requires elevation (manifest set to
+`requireAdministrator`, or `CONFIG["run_as_admin"] = True`), Windows will
+show a UAC prompt every single login, and the app won't start at all if the
+prompt is dismissed or times out. For that case, use Option B instead.
+
+### Option B — Task Scheduler (recommended for elevated/admin mode)
+
+This runs the watermark elevated automatically, with no UAC prompt, every
+time the user logs in.
+
+1. Press `Win + R`, type `taskschd.msc`, press Enter to open Task Scheduler.
+2. Click **Create Task...** (not "Create Basic Task", so you get full options).
+3. **General tab**:
+   - Name: `Desktop Watermark`
+   - Select **"Run with highest privileges"** (this is what avoids the UAC
+     prompt for elevated apps)
+   - Configure for: your Windows version
+4. **Triggers tab** → **New...**:
+   - Begin the task: **At log on**
+   - Specify: **Any user**, or pick the specific user account
+5. **Actions tab** → **New...**:
+   - Action: **Start a program**
+   - Program/script: path to `DesktopWatermark.exe` (or `pythonw.exe` with
+     the script path as an argument, if running from source)
+6. **Conditions tab**: uncheck "Start the task only if the computer is on
+   AC power" if this is a laptop that should also show the watermark on
+   battery.
+7. Click OK, enter the user's password if prompted to save the task.
+
+To do the same thing from a script (e.g. for deployment via Group Policy or
+an MDM tool), run this once as an administrator:
+
+```powershell
+schtasks /create /tn "Desktop Watermark" /tr "C:\path\to\DesktopWatermark.exe" /sc onlogon /rl highest /f
+```
+
+### Option C — Registry `Run` key (for automated install scripts)
+
+```powershell
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "DesktopWatermark" /t REG_SZ /d "C:\path\to\DesktopWatermark.exe" /f
+```
+
+This has the same UAC-prompt limitation as Option A if elevation is
+required, since `HKCU\...\Run` entries launch at normal (non-elevated)
+privilege by default.
+
+### Removing auto-start
+
+- **Startup folder**: delete the shortcut from `shell:startup`.
+- **Task Scheduler**: open `taskschd.msc` → find "Desktop Watermark" under
+  Task Scheduler Library → right-click → Delete. Or run:
+  ```powershell
+  schtasks /delete /tn "Desktop Watermark" /f
+  ```
+- **Registry**:
+  ```powershell
+  reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "DesktopWatermark" /f
+  ```
+
+---
+
+## 8. Notes & limitations
+
+- The "click-through" behavior means the overlay never intercepts mouse or
+  keyboard input — it's purely visual.
+- **Taskbar stays clickable**: by default (`avoid_taskbar = True`), the
+  overlay only covers the desktop **work area** (the screen minus the
+  taskbar) on the primary monitor, so clicking taskbar buttons to switch
+  apps always works. If you set `avoid_taskbar = False`, the overlay spans
+  the full virtual screen (all monitors) including the taskbar area —
+  click-through is still applied, but some Windows versions can make
+  taskbar interaction less reliable when a topmost layered window sits
+  above it.
+- **Watermark hidden behind some Microsoft apps**: Teams, Outlook (reminder
+  popups), PowerPoint, and OneNote ("Always on Top" notes) periodically
+  re-assert their own "always on top" status, which can push them above the
+  overlay in Windows' topmost z-order band. The script counters this by
+  re-applying `HWND_TOPMOST` to the overlay every `topmost_refresh_seconds`
+  (default: 1 second), so it stays above those windows. If you still see
+  gaps, lower this value (e.g. to `0.5`).
+- Because it's a topmost layered window, it will appear in most screenshots
+  and screen recordings (this is the intended behavior for a watermark).
+  Some apps using exclusive full-screen / hardware-overlay video may render
+  on top of it regardless.
+- `WS_EX_TOOLWINDOW` is used so the overlay doesn't appear in the taskbar or
+  Alt-Tab switcher.
+- **Multi-monitor**: with `cover_all_monitors = True` (default), one
+  overlay window is created per connected monitor, each sized to that
+  monitor's work area (or full bounds, if `avoid_taskbar = False`). Set
+  `cover_all_monitors = False` to cover only the primary monitor.
+
+## 9. Troubleshooting: watermark not visible over some applications
+
+If the watermark still doesn't appear over certain apps after the fixes
+above, it's almost always one of these:
+
+### A. The app runs "Run as administrator" (elevated)
+
+Windows' **UIPI** (User Interface Privilege Isolation) prevents a normal
+window from staying above an elevated window in z-order, no matter how
+often `HWND_TOPMOST` is re-applied. If the affected app runs elevated:
+
+```python
+"run_as_admin": True,
+```
+
+This makes the script relaunch itself elevated (you'll get a UAC prompt
+once). Now both the overlay and the elevated app are in the same privilege
+band, and the topmost re-assertion works correctly.
+
+### B. The app is on a second/third monitor
+
+Make sure `"cover_all_monitors": True` (the default) — this creates one
+overlay window per connected monitor, sized to that monitor's work area.
+If it's still `False`, only the primary monitor gets a watermark.
+
+### C. The app uses exclusive full-screen mode
+
+Some apps (full-screen video players, games, certain Remote Desktop /
+virtualization clients) bypass the normal desktop compositor (DWM) entirely
+in "exclusive fullscreen" mode. In that mode, **nothing** — not even the
+Windows taskbar — can render on top of them; this is a hardware/driver-level
+limitation, not something a layered window can override. Workarounds:
+
+- Run the app in "windowed" or "borderless windowed" mode instead of
+  exclusive fullscreen, if it has that option.
+- Accept that the watermark won't appear during true exclusive-fullscreen
+  playback (this is the same reason on-screen overlays like Xbox Game Bar
+  sometimes also fail to appear).
+
+### D. It just takes a moment to reappear
+
+The overlay re-asserts itself every `topmost_refresh_seconds` (default 1s).
+If you switch apps and briefly don't see the watermark, wait ~1 second. For
+faster recovery, lower this to `0.3`–`0.5`.
+
+## 10. Converting to a standalone .exe
+
+You can package this script into a single Windows `.exe` using
+[PyInstaller](https://pyinstaller.org/), so it can run on machines without
+Python installed.
+
+### Files involved
+
+- `watermark.py` — the script itself (no changes needed)
+- `watermark.spec` — PyInstaller build configuration
+- `watermark.manifest` — requests administrator privileges (UAC prompt) so
+  the watermark can stay on top of other elevated apps; see section 9A
+- `build_exe.bat` — convenience script that runs the build for you
+
+### Steps (must be run on a Windows machine)
+
+1. Make sure Python 3.9+ is installed on the build machine.
+2. Put `watermark.py`, `watermark.spec`, `watermark.manifest`, and
+   `build_exe.bat` in the same folder.
+3. Double-click `build_exe.bat` (or run it from a command prompt). It will:
+   - `pip install` PyInstaller and all required dependencies
+   - Run `pyinstaller watermark.spec`
+4. When it finishes, your exe is at:
+   ```
+   dist\DesktopWatermark.exe
+   ```
+5. Copy `DesktopWatermark.exe` to any Windows machine and double-click it
+   to run — no Python installation needed there.
+
+### Notes on the build
+
+- **No console window**: the spec sets `console=False`, so running the exe
+  shows no black terminal window (same as running with `pythonw.exe`).
+- **Elevation (UAC)**: `watermark.manifest` requests
+  `requireAdministrator`, so Windows will prompt for admin rights every
+  time the exe starts. This matches `CONFIG["run_as_admin"]` in the script
+  and ensures the watermark stays above elevated applications (see
+  section 9A). If you don't need this, open `watermark.manifest` and
+  change:
+  ```xml
+  <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+  ```
+  to:
+  ```xml
+  <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+  ```
+  then rebuild. Also set `"run_as_admin": False` in `CONFIG` to avoid the
+  script trying to self-elevate redundantly.
+- **Auto-start at login**: see section 7 above — use `DesktopWatermark.exe`
+  as the target instead of `pythonw.exe` + script path. If the manifest
+  requires elevation, use the Task Scheduler method (Option B) to avoid a
+  UAC prompt on every login.
+- **Antivirus / SmartScreen**: freshly built PyInstaller exes are
+  unsigned, so Windows SmartScreen or some antivirus products may flag
+  them on first run ("Windows protected your PC"). This is normal for any
+  unsigned exe — click "More info" → "Run anyway", or sign the exe with a
+  code-signing certificate if you're distributing it more broadly.
+- **Editing settings after building**: the `CONFIG` dictionary is baked
+  into the exe at build time. To change settings (watermark text, colors,
+  excluded apps, etc.) after building, edit `watermark.py` and
+  rebuild — there's currently no external config file the exe reads.
+
+### Troubleshooting: `dist\DesktopWatermark.exe` doesn't exist after running the .bat
+
+The updated `build_exe.bat` now checks every step and will **keep the
+window open with a clear `[ERROR]` message** if anything fails, instead of
+closing or silently continuing. If you're seeing no exe and no clear error,
+make sure you have the latest version of `build_exe.bat` from this project,
+then try again. Common causes, in order of likelihood:
+
+1. **The window closed too fast to read the error.** Always run it by
+   opening a Command Prompt, `cd`-ing to the folder, and typing
+   `build_exe.bat` — that way the window stays open and scrollable even
+   on success, and you can scroll up to read every line.
+
+2. **`python` isn't on PATH.** Open a Command Prompt and run
+   `python --version`. If that fails, reinstall Python and check
+   **"Add python.exe to PATH"** during setup, or repair the existing
+   install from Control Panel → Programs.
+
+3. **`pip install` failed partway** (no internet, behind a corporate
+   proxy, blocked by AV). Scroll up in the build output for the first
+   `ERROR:` line from pip. If you're behind a proxy:
+
+   ```
+   pip install --proxy http://yourproxy:port --upgrade pyinstaller pywin32 psutil pystray pillow
+   ```
+
+4. **Files not in the same folder.** `build_exe.bat` now `cd`s to its own
+   folder automatically and checks for `watermark.py`,
+   `watermark.spec`, and `watermark.manifest` before doing anything else —
+   if any are missing it tells you immediately instead of failing deep
+   inside PyInstaller.
+
+5. **Antivirus deleted/quarantined a file mid-build.** PyInstaller writes
+   many small files into `build\` and `dist\` very quickly, which some AV
+   heuristics flag. Check your AV's quarantine log; if affected, add an
+   exclusion for the project folder and rebuild.
+
+6. **An old `build\` or `dist\` folder from a previous failed attempt was
+   interfering.** The updated script now deletes both before each build,
+   so this should no longer happen — but if you're using an older copy of
+   `build_exe.bat`, delete those two folders by hand and try again.
+
+7. **Run it manually to see the raw PyInstaller output**, which is the
+   most reliable way to diagnose any remaining issue:
+   ```
+   cd C:\path\to\your\folder
+   python -m pip install --upgrade pyinstaller pywin32 psutil pystray pillow
+   python -m PyInstaller --noconfirm --clean watermark.spec
+   ```
+   Read any `ERROR:` or `Traceback` lines this prints — they'll point to
+   the exact cause (e.g. a missing module, a bad manifest, a permissions
+   issue writing to `dist\`).
+
+## 11. Uninstalling
+
+Since `DesktopWatermark.exe` is a standalone file rather than a normal
+installed program, it won't appear in **Settings → Apps** /
+**Add or Remove Programs**. "Uninstalling" just means: stop it from
+running, remove any auto-start entry, and delete the file.
+
+### Option A — Use `uninstall.bat` (recommended)
+
+1. Right-click `uninstall.bat` → **Run as administrator** (recommended,
+   so it can also remove an elevated Task Scheduler entry if one exists).
+2. It will, in order:
+   - Stop `DesktopWatermark.exe` if it's currently running
+   - Remove a Startup-folder shortcut named `DesktopWatermark.lnk`, if present
+   - Remove a Task Scheduler task named `Desktop Watermark`, if present
+   - Remove a Registry `Run` key named `DesktopWatermark`, if present
+   - Ask whether to delete the exe file itself
+3. If you customized the auto-start name (e.g. used a different shortcut
+   or task name when setting it up per section 7), the script won't find
+   it automatically — remove that one manually (see Option B).
+
+### Option B — Manual steps
+
+1. **Stop the running watermark**: open Task Manager (`Ctrl+Shift+Esc`) →
+   find `DesktopWatermark.exe` (or `python.exe`/`pythonw.exe` if running
+   from source) → End task. Or right-click its tray icon → Exit, if you
+   have one.
+
+2. **Remove the auto-start entry** — whichever method you used in
+   section 7:
+   - **Startup folder**: `Win+R` → `shell:startup` → delete the shortcut.
+   - **Task Scheduler**: `Win+R` → `taskschd.msc` → Task Scheduler
+     Library → find your task → right-click → Delete. Or:
+     ```powershell
+     schtasks /delete /tn "Desktop Watermark" /f
+     ```
+   - **Registry Run key**:
+     ```powershell
+     reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "DesktopWatermark" /f
+     ```
+
+3. **Delete the file(s)**:
+   - Delete `DesktopWatermark.exe` (and the `dist\`/`build\` folders if
+     you still have the build output) from wherever you placed it.
+   - If you copied it to multiple machines or a shared network location,
+     repeat there too.
+
+### Notes
+
+- The watermark stores **no persistent data, settings, or registry keys**
+  beyond the optional auto-start entry described above — there's nothing
+  else left behind to clean up.
+- If you were running it from source (`python watermark.py`)
+  rather than the exe, there's nothing to "uninstall" beyond stopping the
+  process and removing whatever auto-start shortcut/task you created — the
+  Python packages (`pywin32`, `psutil`, etc.) can be left alone or removed
+  with `pip uninstall pywin32 psutil pystray pillow` if you no longer need
+  them for anything else.
